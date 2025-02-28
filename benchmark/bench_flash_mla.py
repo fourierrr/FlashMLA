@@ -8,6 +8,10 @@ import torch
 import triton
 import triton.language as tl
 
+from pynvml import nvmlInit, nvmlDeviceGetHandleByIndex, nvmlDeviceGetMemoryInfo
+from pynvml import nvmlDeviceGetUtilizationRates
+import time
+
 # pip install flashinfer-python
 from flash_mla import flash_mla_with_kvcache, get_mla_metadata
 
@@ -473,7 +477,13 @@ def compare_a(target, b, s_q, cache_seqlens, h_q, h_kv, d, dv, causal, dtype):
 
     FLOPS = s_q * total_seqlens * h_q * (d + dv) * 2
     bytes = (total_seqlens * h_kv * d + b * s_q * h_q * d + b * s_q * h_q * dv) * (torch.finfo(dtype).bits // 8)
-    print(f"perf {target}: {perf_b:.3f} ms, {FLOPS / 10 ** 9 / perf_b:.0f} TFLOPS, {bytes / 10 ** 6 / perf_b:.0f} GB/s")
+
+    gpu_state=get_gpu_stats_nvml()
+    g_util=gpu_state["gpu_util"]
+    m_util=gpu_state["mem_util"]
+
+    print(f"perf {target}: {perf_b:.3f} ms, {FLOPS / 10 ** 9 / perf_b:.0f} TFLOPS, {bytes / 10 ** 6 / perf_b:.0f} GB/s, gpu_util: {g_util}, mem_util: {m_util}")
+
     return bytes / 10 ** 6 / perf_b
 
 
@@ -488,6 +498,29 @@ shape_configs = [
     {"b": batch, "s_q": 1, "cache_seqlens": torch.tensor([seqlen + 2 * i for i in range(batch)], dtype=torch.int32, device="cuda"), "h_q": head, "h_kv": 1, "d": 512+64, "dv": 512, "causal": True, "dtype": torch.bfloat16}
     for batch in [128] for seqlen in [1024, 2048, 4096, 8192, 8192*2, 8192*4] for head in [16,32,64,128]
 ]
+
+def get_gpu_stats_nvml(device_id=0):
+    nvmlInit()
+    handle = nvmlDeviceGetHandleByIndex(device_id)
+    
+    # 显存信息
+    # mem_info = nvmlDeviceGetMemoryInfo(handle)
+    # mem_used = mem_info.used / 1024**2
+    # mem_total = mem_info.total / 1024**2
+    
+    # GPU利用率（计算负载）
+    util = nvmlDeviceGetUtilizationRates(handle)
+
+
+
+    
+    return {
+        "device": f"GPU{device_id}",
+        # "memory_used (MB)": round(mem_used, 2),
+        # "memory_total (MB)": round(mem_total, 2),
+        "gpu_util": util.gpu,
+        "mem_util": util.memory
+    }
 
 
 def get_args():
